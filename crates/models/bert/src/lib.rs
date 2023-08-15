@@ -241,6 +241,7 @@ impl KnownModel for Bert {
 
                 // self-attention
                 {
+                    current = ctx0.op_cont(&current);
                     let q_current = ctx0.op_reshape_3d(
                         &ctx0.op_add(
                             &ctx0.op_mul_mat(&self.layers[il].q_w, &current),
@@ -274,6 +275,8 @@ impl KnownModel for Bert {
                     );
                     let mut v = ctx0.op_permute(&v_current, (0, 2, 1, 3));
 
+                    let k = ctx0.op_cont(&k);
+                    let q = ctx0.op_cont(&q);
                     let mut kq = ctx0.op_mul_mat(&k, &q);
 
                     // TODO: look into op_scale_inplace and op_soft_max_inplace
