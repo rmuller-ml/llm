@@ -251,6 +251,7 @@ impl InferenceSession {
 
         // Compute the graph
         built_gf.build_forward_expand(&built_result.result);
+        // ggml::dump_dot_graph(Some(&built_gf), None, "forward_llama.dot");
 
         #[cfg(feature = "metal")]
         {

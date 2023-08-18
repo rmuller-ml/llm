@@ -10,6 +10,7 @@
 use std::{
     alloc::Layout,
     os::raw::{c_int, c_void},
+    path::Path,
 };
 
 mod context;
@@ -501,4 +502,38 @@ pub fn cpu_has_blas() -> bool {
 /// Returns true if the current system has GPU BLAS support.
 pub fn cpu_has_gpublas() -> bool {
     unsafe { sys::ggml_cpu_has_gpublas() != 0 }
+}
+
+/// Dump dot graph to file
+pub fn dump_dot_graph<P: AsRef<str>>(
+    gb: Option<&crate::ComputationGraph>,
+    gf: Option<&crate::ComputationGraph>,
+    filename: P,
+) {
+    let fname = std::ffi::CString::new(filename.as_ref()).unwrap();
+    unsafe {
+        match (gb, gf) {
+            (Some(b), Some(f)) => sys::ggml_graph_dump_dot(
+                &b.inner as *const sys::ggml_cgraph,
+                &f.inner as *const sys::ggml_cgraph,
+                fname.as_ptr(),
+            ),
+            (None, Some(f)) => sys::ggml_graph_dump_dot(
+                std::ptr::null(),
+                &f.inner as *const sys::ggml_cgraph,
+                fname.as_ptr(),
+            ),
+            (Some(b), None) => sys::ggml_graph_dump_dot(
+                &b.inner as *const sys::ggml_cgraph,
+                std::ptr::null(),
+                fname.as_ptr(),
+            ),
+            (None, None) => (),
+        }
+    }
+}
+
+/// Returns true if this tensor is contiguous
+pub fn is_contiguous(t: &Tensor) -> bool {
+    unsafe { sys::ggml_is_contiguous(t.ptr.as_ptr()) }
 }

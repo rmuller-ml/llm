@@ -252,6 +252,7 @@ impl KnownModel for Bert {
                         input_len,
                     );
                     let q = ctx0.op_permute(&q_current, (0, 2, 1, 3));
+                    print_shape(&q, "q");
 
                     let k_current = ctx0.op_reshape_3d(
                         &ctx0.op_add(
@@ -263,6 +264,7 @@ impl KnownModel for Bert {
                         input_len,
                     );
                     let k = ctx0.op_permute(&k_current, (0, 2, 1, 3));
+                    print_shape(&k, "k");
                     let k = ctx0.op_cpy(
                         &k,
                         &ctx0.new_tensor_3d(ggml::Type::F32, d_head, input_len, n_head),
@@ -283,8 +285,6 @@ impl KnownModel for Bert {
                         &ctx0.new_tensor_3d(ggml::Type::F32, d_head, input_len, n_head),
                     );
 
-                    print_shape(&k, "k");
-                    print_shape(&q, "q");
                     let mut kq = ctx0.op_mul_mat(&k, &q);
 
                     // TODO: look into op_scale_inplace and op_soft_max_inplace
@@ -358,9 +358,11 @@ impl KnownModel for Bert {
             input_layer = ctx0.op_mul_mat(&input_layer, &sum);
 
             // normalizer
-            let length = ctx0.op_sqrt(&ctx0.op_sum(&ctx0.op_sqr(&input_layer)));
+            // let length = ctx0.op_sqrt(&ctx0.op_sum(&ctx0.op_sqr(&input_layer)));
 
-            input_layer = ctx0.op_scale(&input_layer, &ctx0.op_div(&ctx0.new_f32(1.0), &length));
+            // input_layer = ctx0.op_scale(&input_layer, &ctx0.op_div(&ctx0.new_f32(1.0), &length));
+
+            // println!("writing dot graph");
 
             (
                 gf,
@@ -475,5 +477,10 @@ struct Layer {
 }
 
 fn print_shape(t: &ggml::Tensor, name: &str) {
-    println!("{name} {} {:?}", t.get_type(), t.get_ne());
+    // println!(
+    //     "{name} {} {} {:?}",
+    //     if ggml::is_contiguous(&t) { "c" } else { "nc" },
+    //     t.get_type(),
+    //     t.get_ne()
+    // );
 }
