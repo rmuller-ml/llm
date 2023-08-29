@@ -253,6 +253,10 @@ impl KnownModel for Bert {
                     );
                     let q = ctx0.op_permute(&q_current, (0, 2, 1, 3));
                     print_shape(&q, "q");
+                    let q = ctx0.op_cpy(
+                        &q,
+                        &ctx0.new_tensor_3d(ggml::Type::F32, d_head, input_len, n_head),
+                    );
 
                     let k_current = ctx0.op_reshape_3d(
                         &ctx0.op_add(
@@ -267,7 +271,7 @@ impl KnownModel for Bert {
                     print_shape(&k, "k");
                     let k = ctx0.op_cpy(
                         &k,
-                        &ctx0.new_tensor_3d(ggml::Type::F32, d_head, input_len, n_head),
+                        &ctx0.new_tensor_3d(ggml::Type::F16, d_head, input_len, n_head),
                     );
 
                     let v_current = ctx0.op_reshape_3d(
@@ -282,7 +286,7 @@ impl KnownModel for Bert {
                     let mut v = ctx0.op_permute(&v_current, (0, 2, 1, 3));
                     v = ctx0.op_cpy(
                         &v,
-                        &ctx0.new_tensor_3d(ggml::Type::F32, d_head, input_len, n_head),
+                        &ctx0.new_tensor_3d(ggml::Type::F16, d_head, input_len, n_head),
                     );
 
                     let mut kq = ctx0.op_mul_mat(&k, &q);
@@ -351,17 +355,20 @@ impl KnownModel for Bert {
             }
             input_layer = ctx0.op_cont(&ctx0.op_transpose(&input_layer));
 
-            ctx0.set_offloading(false);
+            // ctx0.set_offloading(false);
             // pooler
             let mut sum = ctx0.new_tensor_2d(llm_base::ElementType::F32, input_len, 1);
             sum = ctx0.set_f32(&sum, 1.0 / (input_len as f32));
+            input_layer = ctx0.op_cpy(
+                &input_layer,
+                &ctx0.new_tensor_2d(ggml::Type::F16, input_len, n_embd),
+            );
             input_layer = ctx0.op_mul_mat(&input_layer, &sum);
 
             // normalizer
             // let length = ctx0.op_sqrt(&ctx0.op_sum(&ctx0.op_sqr(&input_layer)));
 
             // input_layer = ctx0.op_scale(&input_layer, &ctx0.op_div(&ctx0.new_f32(1.0), &length));
-
             // println!("writing dot graph");
 
             (
@@ -477,10 +484,5 @@ struct Layer {
 }
 
 fn print_shape(t: &ggml::Tensor, name: &str) {
-    // println!(
-    //     "{name} {} {} {:?}",
-    //     if ggml::is_contiguous(&t) { "c" } else { "nc" },
-    //     t.get_type(),
-    //     t.get_ne()
-    // );
+    println!("{name} {} [{}] {:?}", t.get_type(), t.is_contiguous(), t.get_ne());
 }
