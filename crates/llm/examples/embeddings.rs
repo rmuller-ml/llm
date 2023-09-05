@@ -49,7 +49,8 @@ fn main() {
     };
 
     // Load model
-    let model_params = llm::ModelParameters::default();
+    let mut model_params = llm::ModelParameters::default();
+    model_params.use_gpu = true;
     let model = llm::load_dynamic(
         Some(model_architecture),
         &model_path,
@@ -60,16 +61,16 @@ fn main() {
     .unwrap_or_else(|err| {
         panic!("Failed to load {model_architecture} model from {model_path:?}: {err}")
     });
-    let inference_parameters = llm::InferenceParameters::default();
+    let mut session = model.start_session(Default::default());
 
     // Generate embeddings for query and comparands
-    let query_embeddings = get_embeddings(model.as_ref(), &inference_parameters, query);
+    let query_embeddings = get_embeddings(model.as_ref(), &mut session, query);
     let comparand_embeddings: Vec<(String, Vec<f32>)> = comparands
         .iter()
         .map(|text| {
             (
                 text.clone(),
-                get_embeddings(model.as_ref(), &inference_parameters, text),
+                get_embeddings(model.as_ref(), &mut session, text),
             )
         })
         .collect();
@@ -109,10 +110,9 @@ fn main() {
 
 fn get_embeddings(
     model: &dyn llm::Model,
-    inference_parameters: &llm::InferenceParameters,
+    session: &mut llm::InferenceSession,
     query: &str,
 ) -> Vec<f32> {
-    let mut session = model.start_session(Default::default());
     let mut output_request = llm::OutputRequest {
         all_logits: None,
         embeddings: Some(Vec::new()),
@@ -125,7 +125,7 @@ fn get_embeddings(
         .iter()
         .map(|(_, tok)| *tok)
         .collect::<Vec<_>>();
-    model.evaluate(&mut session, &query_token_ids, &mut output_request);
+    model.evaluate(session, &query_token_ids, &mut output_request);
     output_request.embeddings.unwrap()
 }
 
