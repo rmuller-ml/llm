@@ -180,7 +180,8 @@ impl KnownModel for Bert {
         input_tokens: &[TokenId],
         output_request: &mut OutputRequest,
     ) {
-        let input_len = input_tokens.len();
+        let input_tokens = &input_tokens[..256.min(input_tokens.len())]; // take 256 or less tokens
+        let input_len = dbg!(input_tokens.len());
         let _session_len = session.n_past;
         let _ctx_size = self.params.context_size;
 
@@ -296,7 +297,7 @@ impl KnownModel for Bert {
                         &kq,
                         &ctx0.new_f32(1.0 / ((n_embd as f32 / n_head as f32).sqrt())),
                     );
-                    kq = ctx0.op_soft_max(&kq);
+                    kq = ctx0.op_soft_max_inplace(&kq);
 
                     v = ctx0.op_cont(&ctx0.op_transpose(&v));
 
@@ -484,5 +485,10 @@ struct Layer {
 }
 
 fn print_shape(t: &ggml::Tensor, name: &str) {
-    println!("{name} {} [{}] {:?}", t.get_type(), t.is_contiguous(), t.get_ne());
+    // println!(
+    //     "{name} {} [{}] {:?}",
+    //     t.get_type(),
+    //     t.is_contiguous(),
+    //     t.get_ne()
+    // );
 }
