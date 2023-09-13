@@ -181,7 +181,7 @@ impl KnownModel for Bert {
         output_request: &mut OutputRequest,
     ) {
         let input_tokens = &input_tokens[..256.min(input_tokens.len())]; // take 256 or less tokens
-        let input_len = dbg!(input_tokens.len());
+        let input_len = input_tokens.len();
         let _session_len = session.n_past;
         let _ctx_size = self.params.context_size;
 
