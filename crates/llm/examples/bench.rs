@@ -71,7 +71,7 @@ fn main() {
     let corpus = &include_str!("./vicuna-chat.rs")
         .lines()
         .map(|l| &l[..500.min(l.len())])
-        .take(1)
+        .take(2)
         .collect::<Vec<_>>();
 
     // Load model

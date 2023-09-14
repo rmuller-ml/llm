@@ -355,13 +355,13 @@ impl KnownModel for Bert {
 
             // ctx0.set_offloading(false);
             // pooler
-            let mut sum = ctx0.new_tensor_2d(llm_base::ElementType::F32, input_len, 1);
-            sum = ctx0.set_f32(&sum, 1.0 / (input_len as f32));
-            input_layer = ctx0.op_cpy(
-                &input_layer,
-                &ctx0.new_tensor_2d(ggml::Type::F16, input_len, n_embd),
-            );
-            input_layer = ctx0.op_mul_mat(&input_layer, &sum);
+            // let mut sum = ctx0.new_tensor_2d(llm_base::ElementType::F32, input_len, 1);
+            // sum = ctx0.set_f32(&sum, 1.0 / (input_len as f32));
+            // input_layer = ctx0.op_cpy(
+            //     &input_layer,
+            //     &ctx0.new_tensor_2d(ggml::Type::F16, input_len, n_embd),
+            // );
+            // input_layer = ctx0.op_mul_mat(&input_layer, &sum);
 
             // normalizer
             // let length = ctx0.op_sqrt(&ctx0.op_sum(&ctx0.op_sqr(&input_layer)));
@@ -394,6 +394,11 @@ impl KnownModel for Bert {
     ) {
         let batch_size = input_tokens.len();
         let sequence_len = 256;
+
+        let scaling_factor = input_tokens
+            .iter()
+            .map(|row| 1.0 / row.len() as f32)
+            .collect::<Vec<_>>();
 
         // TODO: Keep track of unpadded sequence lengths
         let input_tokens = input_tokens
@@ -468,6 +473,11 @@ impl KnownModel for Bert {
                 binary_attention_mask_tensor
                     .write_data(bytemuck::cast_slice(&binary_attention_mask))
             };
+
+            // Write scaling factor to tensor
+            let mut scaling_factor_tensor =
+                ctx0.new_tensor_3d(llm_base::ElementType::F32, 1, 1, batch_size);
+            unsafe { scaling_factor_tensor.write_data(bytemuck::cast_slice(&scaling_factor)) };
 
             // IL = word_embeddings + token_types + position_embeddingso
             {
@@ -588,7 +598,10 @@ impl KnownModel for Bert {
                     );
 
                     // Add attention mask
-                    kq = ctx0.op_add(&kq, &attention_mask_tensor);
+                    kq = ctx0.op_add(
+                        &kq,
+                        &ctx0.op_reshape_4d(&attention_mask_tensor, sequence_len, 1, 1, batch_size),
+                    );
 
                     kq = ctx0.op_soft_max_inplace(&kq); // (256, 256, 12, 8)
                                                         // v (32, 256, 12, 8)
@@ -663,18 +676,20 @@ impl KnownModel for Bert {
 
             // ctx0.set_offloading(false);
             // pooler
-            let mut sum =
-                ctx0.new_tensor_3d(llm_base::ElementType::F32, sequence_len, 1, batch_size);
-            sum = ctx0.set_f32(&sum, 1.0 / (sequence_len as f32));
+            // let mut sum =
+            //     ctx0.new_tensor_3d(llm_base::ElementType::F32, sequence_len, 1, batch_size);
+            // sum = ctx0.set_f32(&sum, 1.0);
+            // sum = ctx0.op_mul(&sum, &scaling_factor_tensor);
 
-            input_layer = ctx0.op_mul(&input_layer, &binary_attention_mask_tensor);
+            // // (256, 384, 2, 1) * (256, 1, 2, 1)
+            // input_layer = ctx0.op_mul(&input_layer, &binary_attention_mask_tensor);
 
-            input_layer = ctx0.op_cpy(
-                &input_layer,
-                &ctx0.new_tensor_3d(ggml::Type::F16, sequence_len, n_embd, batch_size),
-            );
-            input_layer =
-                ctx0.op_reshape_2d(&ctx0.op_mul_mat(&input_layer, &sum), n_embd, batch_size);
+            // input_layer = ctx0.op_cpy(
+            //     &input_layer,
+            //     &ctx0.new_tensor_3d(ggml::Type::F16, sequence_len, n_embd, batch_size),
+            // );
+            // input_layer =
+            //     ctx0.op_reshape_2d(&ctx0.op_mul_mat(&input_layer, &sum), n_embd, batch_size);
 
             // normalizer
             // let length = ctx0.op_sqrt(&ctx0.op_sum(&ctx0.op_sqr(&input_layer)));
