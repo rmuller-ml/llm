@@ -243,49 +243,46 @@ impl KnownModel for Bert {
                 // self-attention
                 {
                     print_shape(&current, "current");
-                    let q_current = ctx0.op_reshape_3d(
+                    let q = ctx0.op_reshape_3d(
                         &ctx0.op_add(
                             &ctx0.op_mul_mat(&self.layers[il].q_w, &current),
                             &self.layers[il].q_b,
                         ),
                         d_head,
-                        n_head,
                         input_len,
+                        n_head,
                     );
-                    let q = ctx0.op_permute(&q_current, (0, 2, 1, 3));
                     print_shape(&q, "q");
                     let q = ctx0.op_cpy(
                         &q,
                         &ctx0.new_tensor_3d(ggml::Type::F32, d_head, input_len, n_head),
                     );
 
-                    let k_current = ctx0.op_reshape_3d(
+                    let k = ctx0.op_reshape_3d(
                         &ctx0.op_add(
                             &ctx0.op_mul_mat(&self.layers[il].k_w, &current),
                             &self.layers[il].k_b,
                         ),
                         d_head,
-                        n_head,
                         input_len,
+                        n_head,
                     );
-                    let k = ctx0.op_permute(&k_current, (0, 2, 1, 3));
                     print_shape(&k, "k");
                     let k = ctx0.op_cpy(
                         &k,
                         &ctx0.new_tensor_3d(ggml::Type::F16, d_head, input_len, n_head),
                     );
 
-                    let v_current = ctx0.op_reshape_3d(
+                    let v = ctx0.op_reshape_3d(
                         &ctx0.op_add(
                             &ctx0.op_mul_mat(&self.layers[il].v_w, &current),
                             &self.layers[il].v_b,
                         ),
                         d_head,
-                        n_head,
                         input_len,
+                        n_head,
                     );
-                    let mut v = ctx0.op_permute(&v_current, (0, 2, 1, 3));
-                    v = ctx0.op_cpy(
+                    let mut v = ctx0.op_cpy(
                         &v,
                         &ctx0.new_tensor_3d(ggml::Type::F16, d_head, input_len, n_head),
                     );
@@ -301,8 +298,8 @@ impl KnownModel for Bert {
 
                     v = ctx0.op_cont(&ctx0.op_transpose(&v));
 
-                    let mut kqv = ctx0.op_mul_mat(&v, &kq);
-                    kqv = ctx0.op_permute(&kqv, (0, 2, 1, 3));
+                    let kqv =
+                        ctx0.op_reshape_3d(&ctx0.op_mul_mat(&v, &kq), d_head, n_head, input_len);
 
                     current = ctx0.op_cpy(
                         &kqv,
@@ -387,6 +384,322 @@ impl KnownModel for Bert {
         common::extract_embeddings(output_request, &outputs.embedding_result, n_embd, 1);
     }
 
+    /// Blah, blah, blah
+    #[tracing::instrument(level = "trace", skip_all)]
+    fn batch_evaluate(
+        &self,
+        session: &mut InferenceSession,
+        input_tokens: &[&[TokenId]],
+        output_request: &mut OutputRequest,
+    ) {
+        let batch_size = input_tokens.len();
+        let sequence_len = 256;
+
+        // TODO: Keep track of unpadded sequence lengths
+        let input_tokens = input_tokens
+            .iter()
+            .flat_map(|row| {
+                let mut row = row.to_vec();
+                let pad_token_id = self.pad_token_id().unwrap();
+                row.resize(256, pad_token_id);
+                row
+            })
+            .collect::<Vec<_>>();
+
+        // If input token is equal to pad token, then set to the largest negative float32, otherwise make it 0.0
+        let attention_mask = input_tokens
+            .iter()
+            .map(|&tok| {
+                if tok == self.pad_token_id().unwrap() {
+                    std::f32::MIN
+                } else {
+                    0.0
+                }
+            })
+            .collect::<Vec<_>>();
+
+        // Write a binary attention_mask which is 1 for non-pad tokens and 0 for pad tokens
+
+        let binary_attention_mask = input_tokens
+            .iter()
+            .map(|&tok| {
+                if tok == self.pad_token_id().unwrap() {
+                    0
+                } else {
+                    1
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let input_len = input_tokens.len();
+
+        let _session_len = session.n_past;
+        let _ctx_size = self.params.context_size;
+
+        let Hyperparameters {
+            n_vocab,
+            n_max_tokens: _,
+            n_embd,
+            n_intermediate: _,
+            n_head,
+            n_layer,
+            file_type: _,
+        } = self.hyperparameters;
+
+        let d_head = n_embd / n_head;
+
+        let outputs = session.compute(self.context.clone(), &input_tokens, |builder| {
+            let mut ctx0 = builder.ctx0.borrow_mut();
+            let gf = ggml::ComputationGraph::new();
+
+            let embd = builder.embd;
+
+            let mut input_layer = ctx0.op_get_rows(&self.word_embeddings, embd);
+
+            // Write attention mask to tensor
+            let mut attention_mask_tensor =
+                ctx0.new_tensor_2d(llm_base::ElementType::F32, sequence_len, batch_size);
+            unsafe { attention_mask_tensor.write_data(bytemuck::cast_slice(&attention_mask)) };
+
+            // Write attention mask to tensor
+            let mut binary_attention_mask_tensor =
+                ctx0.new_tensor_2d(llm_base::ElementType::F32, sequence_len, batch_size);
+            unsafe {
+                binary_attention_mask_tensor
+                    .write_data(bytemuck::cast_slice(&binary_attention_mask))
+            };
+
+            // IL = word_embeddings + token_types + position_embeddingso
+            {
+                // token-types: a zero tensor
+                let mut token_types = ctx0.new_tensor_1d(llm_base::ElementType::I32, input_len);
+                token_types.zero_data();
+
+                // position embeddings: another tensor
+                let position_buf: Vec<i32> = (0..input_len as i32).collect();
+                let mut positions = ctx0.new_tensor_1d(llm_base::ElementType::I32, input_len);
+                unsafe { positions.write_data(bytemuck::cast_slice(&position_buf)) };
+
+                // IL += token_types
+                input_layer = ctx0.op_add(
+                    &input_layer,
+                    &ctx0.op_get_rows(&self.token_type_embeddings, &token_types),
+                );
+
+                // IL += position_embeddings
+                input_layer = ctx0.op_add(
+                    &input_layer,
+                    &ctx0.op_get_rows(&self.position_embeddings, &positions),
+                );
+            }
+
+            // Reshape input to (n_embed, sequence_len, batch_size)
+            input_layer = ctx0.op_reshape_3d(&input_layer, n_embd, sequence_len, batch_size);
+
+            // embd norm
+            {
+                input_layer = ctx0.op_norm(&input_layer);
+                input_layer = ctx0.op_add(&ctx0.op_mul(&input_layer, &self.ln_e_w), &self.ln_e_b);
+            }
+
+            for il in 0..n_layer {
+                ctx0.set_offloading(self.params.should_offload(il));
+
+                let mut current = input_layer.share();
+
+                // self-attention
+                {
+                    print_shape(&current, "current");
+                    let a = &ctx0.op_add(
+                        &ctx0.op_mul_mat(&self.layers[il].q_w, &current),
+                        &self.layers[il].q_b,
+                    );
+                    let q = ctx0.op_reshape_4d(a, d_head, sequence_len, n_head, batch_size);
+                    print_shape(&q, "q");
+                    let q = ctx0.op_cpy(
+                        &q,
+                        &ctx0.new_tensor_4d(
+                            ggml::Type::F32,
+                            d_head,
+                            sequence_len,
+                            n_head,
+                            batch_size,
+                        ),
+                    );
+
+                    let k = ctx0.op_reshape_4d(
+                        &ctx0.op_add(
+                            &ctx0.op_mul_mat(&self.layers[il].k_w, &current),
+                            &self.layers[il].k_b,
+                        ),
+                        d_head,
+                        sequence_len,
+                        n_head,
+                        batch_size,
+                    );
+                    print_shape(&k, "k");
+                    let k = ctx0.op_cpy(
+                        &k,
+                        &ctx0.new_tensor_4d(
+                            ggml::Type::F16,
+                            d_head,
+                            sequence_len,
+                            n_head,
+                            batch_size,
+                        ),
+                    );
+
+                    let v = ctx0.op_reshape_4d(
+                        &ctx0.op_add(
+                            &ctx0.op_mul_mat(&self.layers[il].v_w, &current),
+                            &self.layers[il].v_b,
+                        ),
+                        d_head,
+                        sequence_len,
+                        n_head,
+                        batch_size,
+                    );
+                    let mut v = ctx0.op_cpy(
+                        &v,
+                        &ctx0.new_tensor_4d(
+                            ggml::Type::F16,
+                            d_head,
+                            sequence_len,
+                            n_head,
+                            batch_size,
+                        ),
+                    );
+
+                    // You could reshape 4 dimensional input tensors from [a,b,c,d] to [a,b,c*d,1]
+                    // before using mul_mat and then reshape the result [x,y,c*d] back to [x,y,c,d].
+                    // Make 3d for matmul
+                    let q = ctx0.op_reshape_3d(&q, d_head, sequence_len, n_head * batch_size);
+                    let k = ctx0.op_reshape_3d(&k, d_head, sequence_len, n_head * batch_size);
+
+                    let mut kq = ctx0.op_mul_mat(&k, &q);
+
+                    // Reshape back to 4d
+                    kq = ctx0.op_reshape_4d(&kq, sequence_len, sequence_len, n_head, batch_size);
+
+                    // TODO: look into op_scale_inplace and op_soft_max_inplace
+                    kq = ctx0.op_scale(
+                        &kq,
+                        &ctx0.new_f32(1.0 / ((n_embd as f32 / n_head as f32).sqrt())),
+                    );
+
+                    // Add attention mask
+                    kq = ctx0.op_add(&kq, &attention_mask_tensor);
+
+                    kq = ctx0.op_soft_max_inplace(&kq); // (256, 256, 12, 8)
+                                                        // v (32, 256, 12, 8)
+                    v = ctx0.op_cont(&ctx0.op_transpose(&v));
+                    // v (256, 32, 12, 8)
+
+                    let kq =
+                        ctx0.op_reshape_3d(&kq, sequence_len, sequence_len, n_head * batch_size); // (256, 256, 96, 1)
+                    let v = ctx0.op_reshape_3d(&v, sequence_len, d_head, n_head * batch_size); // (256, 32, 96, 1)
+
+                    let kqv = &ctx0.op_mul_mat(&v, &kq);
+                    // kqv (32, 256, 96, 1)
+
+                    // Reshape back to 4d
+                    let kqv = ctx0.op_reshape_4d(kqv, d_head, sequence_len, n_head, batch_size);
+                    // kqv (32, 256, 12, 8)
+
+                    let kqv = ctx0.op_reshape_4d(&kqv, d_head, n_head, sequence_len, batch_size);
+                    // kqv (32, 12, 256, 8)
+
+                    current = ctx0.op_cpy(
+                        &kqv,
+                        &ctx0.new_tensor_3d(ggml::Type::F32, n_embd, sequence_len, batch_size),
+                    );
+                }
+
+                // attention output
+                current = ctx0.op_add(
+                    &ctx0.op_mul_mat(&self.layers[il].o_w, &current),
+                    &self.layers[il].o_b,
+                );
+
+                // re-add the layer input
+                current = ctx0.op_add(&current, &input_layer);
+
+                // attention norm
+                {
+                    current = ctx0.op_norm(&current);
+                    current = ctx0.op_add(
+                        &ctx0.op_mul(&current, &self.layers[il].ln_att_w),
+                        &self.layers[il].ln_att_b,
+                    );
+                }
+
+                let att_output = current.share();
+
+                // intermediate output
+                current = ctx0.op_mul_mat(&self.layers[il].ff_i_w, &current);
+                current = ctx0.op_add(&current, &self.layers[il].ff_i_b);
+                current = ctx0.op_gelu(&current);
+
+                // layer output
+                current = ctx0.op_mul_mat(&self.layers[il].ff_o_w, &current);
+                current = ctx0.op_add(&current, &self.layers[il].ff_o_b);
+
+                // attentions bypass the intermediate layer
+                current = ctx0.op_add(&att_output, &current);
+
+                // output norm
+                {
+                    current = ctx0.op_norm(&current);
+                    current = ctx0.op_add(
+                        &ctx0.op_mul(&current, &self.layers[il].ln_out_w),
+                        &self.layers[il].ln_out_b,
+                    );
+                }
+
+                // input for next layer
+                input_layer = current;
+            }
+            input_layer = ctx0.op_cont(&ctx0.op_transpose(&input_layer));
+
+            // ctx0.set_offloading(false);
+            // pooler
+            let mut sum =
+                ctx0.new_tensor_3d(llm_base::ElementType::F32, sequence_len, 1, batch_size);
+            sum = ctx0.set_f32(&sum, 1.0 / (sequence_len as f32));
+
+            input_layer = ctx0.op_mul(&input_layer, &binary_attention_mask_tensor);
+
+            input_layer = ctx0.op_cpy(
+                &input_layer,
+                &ctx0.new_tensor_3d(ggml::Type::F16, sequence_len, n_embd, batch_size),
+            );
+            input_layer =
+                ctx0.op_reshape_2d(&ctx0.op_mul_mat(&input_layer, &sum), n_embd, batch_size);
+
+            // normalizer
+            // let length = ctx0.op_sqrt(&ctx0.op_sum(&ctx0.op_sqr(&input_layer)));
+
+            // input_layer = ctx0.op_scale(&input_layer, &ctx0.op_div(&ctx0.new_f32(1.0), &length));
+            // println!("writing dot graph");
+
+            (
+                gf,
+                GraphOutputs {
+                    result: input_layer.share(),
+                    embedding_result: input_layer.share(),
+                },
+            )
+        });
+
+        // finish evaluation
+        common::extract_embeddings(
+            output_request,
+            &outputs.embedding_result,
+            n_embd,
+            batch_size,
+        );
+    }
+
     fn hyperparameters(&self) -> &Self::Hyperparameters {
         &self.hyperparameters
     }
@@ -397,6 +710,10 @@ impl KnownModel for Bert {
 
     fn context_size(&self) -> usize {
         self.params.context_size
+    }
+
+    fn pad_token_id(&self) -> Option<TokenId> {
+        self.tokenizer.id("[PAD]".as_bytes())
     }
 
     fn bot_token_id(&self) -> Option<TokenId> {

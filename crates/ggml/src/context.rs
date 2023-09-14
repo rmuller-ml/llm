@@ -236,6 +236,28 @@ impl Context {
         self.new_tensor_raw(raw)
     }
 
+    /// Creates a new 4D tensor.
+    pub fn new_tensor_4d(
+        &self,
+        typ: Type,
+        ne0: usize,
+        ne1: usize,
+        ne2: usize,
+        ne3: usize,
+    ) -> Tensor {
+        let raw = unsafe {
+            sys::ggml_new_tensor_4d(
+                self.as_ptr(),
+                typ.into(),
+                usize_to_i64(ne0),
+                usize_to_i64(ne1),
+                usize_to_i64(ne2),
+                usize_to_i64(ne3),
+            )
+        };
+        self.new_tensor_raw(raw)
+    }
+
     /// Creates a new 1D tensor with the specified value.
     pub fn new_f32(&self, x: f32) -> Tensor {
         let raw = unsafe { sys::ggml_new_f32(self.as_ptr(), x) };
@@ -509,6 +531,28 @@ impl Context {
                 usize_to_i64(ne0),
                 usize_to_i64(ne1),
                 usize_to_i64(ne2),
+            )
+        };
+        self.new_tensor_raw(tensor)
+    }
+
+    /// In-place; reshapes `a` in accordance with the specified dimensions.
+    pub fn op_reshape_4d(
+        &self,
+        a: &Tensor,
+        ne0: usize,
+        ne1: usize,
+        ne2: usize,
+        ne3: usize,
+    ) -> Tensor {
+        let tensor = unsafe {
+            sys::ggml_reshape_4d(
+                self.as_ptr(),
+                a.ptr.as_ptr(),
+                usize_to_i64(ne0),
+                usize_to_i64(ne1),
+                usize_to_i64(ne2),
+                usize_to_i64(ne3),
             )
         };
         self.new_tensor_raw(tensor)

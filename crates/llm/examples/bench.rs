@@ -4,8 +4,7 @@ use clap::Parser;
 
 #[derive(Parser)]
 struct Args {
-    model_architecture: llm::ModelArchitecture,
-    model_path: PathBuf,
+    model_path: Option<PathBuf>,
     #[arg(long, short = 'v')]
     pub tokenizer_path: Option<PathBuf>,
     #[arg(long, short = 'r')]
@@ -61,22 +60,23 @@ impl std::ops::Add<BenchResult> for BenchResult {
 }
 
 fn main() {
-    let args = Args::parse();
+    let mut args = Args::parse();
+    args.tokenizer_path = Some("/Users/gabriel/work/research/rt-bench/model/tokenizer.json".into());
+    args.model_path =
+        Some("/Users/gabriel/work/research/rt-bench/model/ggml-model-q4_0.bin".into());
 
     let tokenizer_source = args.to_tokenizer_source();
-    let model_architecture = args.model_architecture;
-    let model_path = args.model_path;
+    let model_architecture = llm::ModelArchitecture::Bert;
+    let model_path = args.model_path.unwrap();
     let corpus = &include_str!("./vicuna-chat.rs")
         .lines()
         .map(|l| &l[..500.min(l.len())])
+        .take(1)
         .collect::<Vec<_>>();
 
     // Load model
     let mut model_params = llm::ModelParameters::default();
-    if args.use_gpu.unwrap_or_default() {
-        model_params.use_gpu = true;
-        dbg!(&model_params.use_gpu);
-    }
+    model_params.use_gpu = true;
     let model = llm::load_dynamic(
         Some(model_architecture),
         &model_path,
@@ -90,31 +90,7 @@ fn main() {
     let inference_parameters = llm::InferenceParameters::default();
 
     // Generate embeddings for query and comparands
-    let mut results = corpus
-        .into_iter()
-        .map(|l| get_embeddings(model.as_ref(), &inference_parameters, l))
-        .collect::<Vec<_>>();
-    results.sort_by(|a, b| {
-        a.elapsed
-            .cmp(&b.elapsed)
-            .then(a.query_token_count.cmp(&b.query_token_count))
-    });
-
-    let slowest = results.first().unwrap();
-    let fastest = results.last().unwrap();
-
-    println!("slowest: {:.04} tok/ms ({})", slowest.rate(), slowest);
-    println!("fastest: {:.04} tok/ms ({})", fastest.rate(), fastest);
-    println!(
-        "average: {:.04} tok/ms, over {} readings",
-        results
-            .clone()
-            .into_iter()
-            .reduce(|acc, x| acc + x)
-            .unwrap()
-            .rate(),
-        results.len(),
-    );
+    let results = get_batch_embeddings(model.as_ref(), &inference_parameters, corpus);
 }
 
 fn get_embeddings(
@@ -122,6 +98,7 @@ fn get_embeddings(
     _inference_parameters: &llm::InferenceParameters,
     query: &str,
 ) -> BenchResult {
+    dbg!(&query);
     let s = std::time::Instant::now();
     let session_config = llm::InferenceSessionConfig {
         ..Default::default()
@@ -147,3 +124,44 @@ fn get_embeddings(
     }
 }
 
+fn get_batch_embeddings(
+    model: &dyn llm::Model,
+    _inference_parameters: &llm::InferenceParameters,
+    corpus: &[&str],
+) -> BenchResult {
+    dbg!(&corpus);
+    let s = std::time::Instant::now();
+    let session_config = llm::InferenceSessionConfig {
+        ..Default::default()
+    };
+    let mut session = model.start_session(session_config);
+    let mut output_request = llm::OutputRequest {
+        all_logits: None,
+        embeddings: Some(Vec::new()),
+    };
+    let vocab = model.tokenizer();
+    let beginning_of_sentence = true;
+
+    let query_token_ids = corpus
+        .iter()
+        .map(|q| {
+            vocab
+                .tokenize(q, beginning_of_sentence)
+                .unwrap()
+                .iter()
+                .map(|(_, tok)| *tok)
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+
+    let query_token_ids: Vec<_> = query_token_ids.iter().map(AsRef::as_ref).collect();
+
+    model.batch_evaluate(&mut session, &query_token_ids, &mut output_request);
+    let _embeddings = output_request.embeddings.unwrap();
+    dbg!(&_embeddings);
+
+    BenchResult {
+        elapsed: s.elapsed(),
+        query_token_count: query_token_ids.len(),
+    }
+}

@@ -65,6 +65,19 @@ pub trait KnownModel: Send + Sync {
         output_request: &mut OutputRequest,
     );
 
+    /// This function is called by the provided [InferenceSession]; it will use this model
+    /// to generate output by evaluating the `input_tokens`.
+    /// The [OutputRequest] is used to specify additional data to fetch from the
+    /// model.
+    fn batch_evaluate(
+        &self,
+        session: &mut InferenceSession,
+        input_tokens: &[&[TokenId]],
+        output_request: &mut OutputRequest,
+    ) {
+        todo!()
+    }
+
     /// Get the hyperparameters for this model.
     fn hyperparameters(&self) -> &Self::Hyperparameters;
 
@@ -74,6 +87,11 @@ pub trait KnownModel: Send + Sync {
     /// Get the context size (configured with [ModelParameters::context_size]) used by
     /// this model.
     fn context_size(&self) -> usize;
+
+    /// Get the beginning of text/beginning of string token ID, if available. This value is defined by model implementers.
+    fn pad_token_id(&self) -> Option<TokenId> {
+        todo!()
+    }
 
     /// Get the beginning of text/beginning of string token ID, if available. This value is defined by model implementers.
     fn bot_token_id(&self) -> Option<TokenId>;
@@ -111,12 +129,26 @@ pub trait Model: Send + Sync {
         output_request: &mut OutputRequest,
     );
 
+    /// This function is called by the provided [InferenceSession]; it will use this model
+    /// to generate output by evaluating the `input_tokens`.
+    /// The [OutputRequest] is used to specify additional data to fetch from the
+    /// model.
+    fn batch_evaluate(
+        &self,
+        session: &mut InferenceSession,
+        input_tokens: &[&[TokenId]],
+        output_request: &mut OutputRequest,
+    );
+
     /// Get the tokenizer for this model.
     fn tokenizer(&self) -> &Tokenizer;
 
     /// Get the context size (configured with [ModelParameters::context_size]) used by
     /// this model.
     fn context_size(&self) -> usize;
+
+    /// Get the beginning of text/beginning of string token ID, if available. This value is defined by model implementers.
+    fn pad_token_id(&self) -> Option<TokenId>;
 
     /// Get the beginning of text/beginning of string token ID, if available. This value is defined by model implementers.
     fn bot_token_id(&self) -> Option<TokenId>;
@@ -141,12 +173,25 @@ impl<H: Hyperparameters, M: KnownModel<Hyperparameters = H>> Model for M {
         KnownModel::evaluate(self, session, input_tokens, output_request)
     }
 
+    fn batch_evaluate(
+        &self,
+        session: &mut InferenceSession,
+        input_tokens: &[&[TokenId]],
+        output_request: &mut OutputRequest,
+    ) {
+        KnownModel::batch_evaluate(self, session, input_tokens, output_request)
+    }
+
     fn tokenizer(&self) -> &Tokenizer {
         KnownModel::tokenizer(self)
     }
 
     fn context_size(&self) -> usize {
         KnownModel::context_size(self)
+    }
+
+    fn pad_token_id(&self) -> Option<TokenId> {
+        KnownModel::pad_token_id(self)
     }
 
     fn bot_token_id(&self) -> Option<TokenId> {
