@@ -46,26 +46,12 @@ pub fn extract_embeddings(
 ) {
     // Extract embeddings
     if let Some(embeddings) = &mut output_request.embeddings {
-        embeddings.resize(n_embd, 0.0);
-        // Create a new vector to hold all embeddings
-        let mut all_embeddings = vec![0.0; n_embd * 256 * n];
-        // SAFETY: Same rationale as for the "Extract logits" section applies.
+        embeddings.resize(n_embd * 8 * n, 0.0);
         dbg!(embeddings_tensor.get_ne());
-        dbg!(embeddings_tensor.nelements());
-        dbg!(n_embd * n);
-        assert_eq!(embeddings_tensor.nelements(), n_embd * 256 * n);
+
+        assert_eq!(embeddings_tensor.nelements(), n_embd * 8 * n);
         unsafe {
-            embeddings_tensor.read_data(0, bytemuck::cast_slice_mut(&mut all_embeddings));
+            embeddings_tensor.read_data(0, bytemuck::cast_slice_mut(embeddings));
         }
-        dbg!(&all_embeddings[..10]);
-        // count number of nan elements in all_embeddings
-        let mut nan_count = 0;
-        for i in 0..all_embeddings.len() {
-            if (all_embeddings[i] as f32).is_nan() {
-                nan_count += 1;
-            }
-        }
-        dbg!(nan_count);
-        embeddings.copy_from_slice(&all_embeddings[n_embd * (n - 1) * 256..]);
     }
 }

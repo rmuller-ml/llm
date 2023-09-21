@@ -17,6 +17,7 @@ llm-gptneox = { path = "../models/gptneox", optional = true, version = "0.2.0-de
 llm-mpt = { path = "../models/mpt", optional = true, version = "0.2.0-dev" }
 llm-falcon = { path = "../models/falcon", optional = true, version = "0.2.0-dev" }
 llm-bert = { path = "../models/bert", optional = true, version = "0.2.0-dev" }
+ndarray = "0.15.6"
 
 serde = { workspace = true }
 tracing = { workspace = true }

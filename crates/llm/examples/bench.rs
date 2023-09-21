@@ -1,4 +1,5 @@
-use std::path::PathBuf;
+use ndarray::{s, Array2, Array3};
+use std::{path::PathBuf, vec};
 
 use clap::Parser;
 
@@ -68,11 +69,10 @@ fn main() {
     let tokenizer_source = args.to_tokenizer_source();
     let model_architecture = llm::ModelArchitecture::Bert;
     let model_path = args.model_path.unwrap();
-    let corpus = &include_str!("./vicuna-chat.rs")
-        .lines()
-        .map(|l| &l[..500.min(l.len())])
-        .take(2)
-        .collect::<Vec<_>>();
+
+    let queries = vec!["the cat sat on the mat", "the quick brown fox jumped over"];
+    // let queries = vec!["the cat sat on the mat"];
+    // let queries = vec!["the quick brown fox jumped over"];
 
     // Load model
     let mut model_params = llm::ModelParameters::default();
@@ -90,38 +90,7 @@ fn main() {
     let inference_parameters = llm::InferenceParameters::default();
 
     // Generate embeddings for query and comparands
-    let results = get_batch_embeddings(model.as_ref(), &inference_parameters, corpus);
-}
-
-fn get_embeddings(
-    model: &dyn llm::Model,
-    _inference_parameters: &llm::InferenceParameters,
-    query: &str,
-) -> BenchResult {
-    dbg!(&query);
-    let s = std::time::Instant::now();
-    let session_config = llm::InferenceSessionConfig {
-        ..Default::default()
-    };
-    let mut session = model.start_session(session_config);
-    let mut output_request = llm::OutputRequest {
-        all_logits: None,
-        embeddings: Some(Vec::new()),
-    };
-    let vocab = model.tokenizer();
-    let beginning_of_sentence = true;
-    let query_token_ids = vocab
-        .tokenize(query, beginning_of_sentence)
-        .unwrap()
-        .iter()
-        .map(|(_, tok)| *tok)
-        .collect::<Vec<_>>();
-    model.evaluate(&mut session, &query_token_ids, &mut output_request);
-    let _embeddings = output_request.embeddings.unwrap();
-    BenchResult {
-        elapsed: s.elapsed(),
-        query_token_count: query_token_ids.len(),
-    }
+    get_batch_embeddings(model.as_ref(), &inference_parameters, &queries);
 }
 
 fn get_batch_embeddings(
@@ -154,12 +123,70 @@ fn get_batch_embeddings(
         })
         .collect::<Vec<_>>();
 
+    let num_query_toks = query_token_ids.iter().map(Vec::len).sum::<usize>();
+    dbg!(num_query_toks);
+
     let query_token_ids: Vec<_> = query_token_ids.iter().map(AsRef::as_ref).collect();
 
     model.batch_evaluate(&mut session, &query_token_ids, &mut output_request);
     let _embeddings = output_request.embeddings.unwrap();
-    dbg!(&_embeddings);
 
+    dbg!(&_embeddings[..8]);
+
+    // Cast to ndarray reshape to (8, 384)
+    // let _embeddings = Array3::from_shape_vec((8, 384, 1), _embeddings).unwrap();
+    // // Get the mean over the first dimension (384, 1)
+    // let _embeddings = _embeddings.mean_axis(ndarray::Axis(0)).unwrap();
+    // // Convert to single dimention vec (384)
+    // let _embeddings = _embeddings.into_shape((384,)).unwrap();
+    // // Print the first 10 elements
+    // dbg!(&_embeddings.to_vec()[..10]);
+
+    let _embeddings = Array3::from_shape_vec((8, 384, 2), _embeddings).unwrap();
+    // // Get the mean over the first dimension (384, 2)
+    let _embeddings = _embeddings.mean_axis(ndarray::Axis(0)).unwrap();
+    // Permute the axes to (2, 384)
+    // Iterate over rows in the matrix
+    for row in _embeddings.t().rows() {
+        // let row = row.into_shape((384,)).unwrap();
+        dbg!(&row.to_vec()[..10]);
+    }
+    // let _embeddings = _embeddings.index_axis_move(ndarray::Axis(1), 0);
+    // dbg!(&_embeddings.shape());
+    // // Print the first 10 elements
+    // dbg!(&_embeddings);
+
+    BenchResult {
+        elapsed: s.elapsed(),
+        query_token_count: query_token_ids.len(),
+    }
+}
+
+fn get_embeddings(
+    model: &dyn llm::Model,
+    _inference_parameters: &llm::InferenceParameters,
+    query: &str,
+) -> BenchResult {
+    dbg!(&query);
+    let s = std::time::Instant::now();
+    let session_config = llm::InferenceSessionConfig {
+        ..Default::default()
+    };
+    let mut session = model.start_session(session_config);
+    let mut output_request = llm::OutputRequest {
+        all_logits: None,
+        embeddings: Some(Vec::new()),
+    };
+    let vocab = model.tokenizer();
+    let beginning_of_sentence = true;
+    let query_token_ids = vocab
+        .tokenize(query, beginning_of_sentence)
+        .unwrap()
+        .iter()
+        .map(|(_, tok)| *tok)
+        .collect::<Vec<_>>();
+    model.evaluate(&mut session, &query_token_ids, &mut output_request);
+    let _embeddings = output_request.embeddings.unwrap();
     BenchResult {
         elapsed: s.elapsed(),
         query_token_count: query_token_ids.len(),
