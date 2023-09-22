@@ -48,13 +48,13 @@ impl HuggingFaceTokenizer {
     ) -> Result<Vec<(Vec<u8>, TokenId)>, TokenizationError> {
         let encoding = self
             .tokenizer
-            .encode(text, false)
+            .encode(text, true)
             .map_err(|e| TokenizationError::TokenizationFailed { error: e })?;
 
-        let encoding = self
-            .tokenizer
-            .post_process(encoding, None, bos)
-            .map_err(|e| TokenizationError::TokenizationFailed { error: e })?;
+        // let encoding = self
+        //     .tokenizer
+        //     .post_process(encoding, None, bos)
+        //     .map_err(|e| TokenizationError::TokenizationFailed { error: e })?;
 
         Ok(encoding
             .get_tokens()
