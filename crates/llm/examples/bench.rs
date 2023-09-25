@@ -71,7 +71,9 @@ fn main() {
     let model_path = args.model_path.unwrap();
 
     //let queries = vec!["the cat sat on the mat", "the quick brown fox jumped over"];
+    //let queries = vec!["the cat sat on the mat"];
     let queries = vec!["the cat sat on the mat", "the cat sat on the mat"];
+
     // let queries = vec!["the quick brown fox jumped over"];
 
     // Load model
@@ -90,8 +92,8 @@ fn main() {
     let inference_parameters = llm::InferenceParameters::default();
 
     // Generate embeddings for query and comparands
-    get_batch_embeddings(model.as_ref(), &inference_parameters, &queries);
-    //get_embeddings(model.as_ref(), &inference_parameters, queries[0]);
+    //get_batch_embeddings(model.as_ref(), &inference_parameters, &queries);
+    get_embeddings(model.as_ref(), &inference_parameters, queries[0]);
 }
 
 fn get_batch_embeddings(
@@ -132,7 +134,7 @@ fn get_batch_embeddings(
     model.batch_evaluate(&mut session, &query_token_ids, &mut output_request);
     let _embeddings = output_request.embeddings.unwrap();
 
-    dbg!(&_embeddings[..64]);
+    dbg!(&_embeddings[384*8..384*8+7]);
 
     // Cast to ndarray reshape to (8, 384)
     // let _embeddings = Array3::from_shape_vec((8, 384, 1), _embeddings).unwrap();
@@ -188,7 +190,7 @@ fn get_embeddings(
         .collect::<Vec<_>>();
     model.evaluate(&mut session, &query_token_ids, &mut output_request);
     let _embeddings = output_request.embeddings.unwrap();
-    dbg!(&_embeddings[..64]);
+    dbg!(&_embeddings[..7]);
 
     // let _embeddings = Array2::from_shape_vec((7, 384), _embeddings).unwrap();
     // // // Get the mean over the first dimension (384, 2)

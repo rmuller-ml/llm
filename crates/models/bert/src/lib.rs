@@ -400,7 +400,7 @@ impl KnownModel for Bert {
     ) {
         let batch_size = input_tokens.len();
         dbg!(batch_size);
-        let sequence_len = 7;
+        let sequence_len = 8;
 
         // TODO: Keep track of unpadded sequence lengths
         let input_tokens = input_tokens
@@ -408,7 +408,7 @@ impl KnownModel for Bert {
             .flat_map(|row| {
                 let mut row = row.to_vec();
                 let pad_token_id = self.pad_token_id().unwrap();
-                row.resize(7, pad_token_id);
+                row.resize(8, pad_token_id);
                 row
             })
             .collect::<Vec<_>>();
@@ -453,11 +453,12 @@ impl KnownModel for Bert {
             let embd = builder.embd;
 
             let mut input_layer = ctx0.op_get_rows(&self.word_embeddings, embd);
+            
 
             // Write attention mask to tensor
             let mut attention_mask_tensor =
                 ctx0.new_tensor_4d(llm_base::ElementType::F32, input_len, 1, 1, 1);
-            unsafe { attention_mask_tensor.write_data(bytemuck::cast_slice(&attention_mask)) };
+            unsafe { attention_mask_tensor.write_data(bytemuck::cast_slice(&attention_mask)) }; 
 
             // IL = word_embeddings + token_types + position_embeddingso
             {
@@ -466,7 +467,7 @@ impl KnownModel for Bert {
                 token_types.zero_data();
 
                 // position embeddings: another tensor
-                let position_buf: Vec<i32> = (0..input_len as i32).map(|x| x % 7).collect();
+                let position_buf: Vec<i32> = (0..input_len as i32).map(|x| x % 8).collect();
                 let mut positions = ctx0.new_tensor_1d(llm_base::ElementType::I32, input_len);
                 unsafe { positions.write_data(bytemuck::cast_slice(&position_buf)) };
 
@@ -497,6 +498,7 @@ impl KnownModel for Bert {
 
                 let mut current = input_layer.share();
 
+
                 // self-attention
                 {
                     print_shape(&current, "current");
@@ -511,6 +513,7 @@ impl KnownModel for Bert {
                         batch_size,
                     );
                     let q = ctx0.op_permute(&q_current, (0, 2, 1, 3));
+
 
                     print_shape(&q, "q");
                     let q = ctx0.op_cpy(
@@ -579,6 +582,9 @@ impl KnownModel for Bert {
 
                     let mut kq = ctx0.op_mul_mat(&k, &q);
 
+                    
+
+
                     // Reshape back to 4d
                     // kq = ctx0.op_reshape_4d(&kq, sequence_len, sequence_len, n_head, batch_size);
 
@@ -590,12 +596,46 @@ impl KnownModel for Bert {
 
                     // Add attention mask (256, 256, 12, 2)
                     // Reshape attention mask (256, 2)
-                    let attention_mask_tensor =
-                        ctx0.op_reshape_4d(&attention_mask_tensor, sequence_len, 1, batch_size, 1);
-                    kq = ctx0.op_add(&kq, &attention_mask_tensor);
 
-                    kq = ctx0.op_soft_max(&kq); // (256, 256, 12, 8)
+
+                    let kq = ctx0.op_reshape_4d(&kq, sequence_len,sequence_len, n_head, batch_size);
+                    let kq = ctx0.op_permute(&kq, (0,3,2,1));
+                    let kq = ctx0.op_cpy(
+                        &kq,
+                        &ctx0.new_tensor_4d(
+                            ggml::Type::F32,
+                            sequence_len,
+                            batch_size,
+                            n_head,
+                            sequence_len,
+                        ),
+                    );
+                    let kq = ctx0.op_reshape_4d(&kq, sequence_len*batch_size, n_head, sequence_len,1);
+
+                    // let attention_mask_tensor =
+                    //     ctx0.op_reshape_4d(&attention_mask_tensor, sequence_len, 1, 1, batch_size);
+                    let kq = ctx0.op_add(&kq, &attention_mask_tensor);
+                    //intermediate_tensor = kq.share();
+
+                    let kq = ctx0.op_reshape_4d(&kq, sequence_len, batch_size, n_head, sequence_len);
+                    let kq = ctx0.op_permute(&kq, (0,3,2,1));
+                    let kq = ctx0.op_cpy(
+                        &kq,
+                        &ctx0.new_tensor_4d(
+                            ggml::Type::F32,
+                            sequence_len,
+                            sequence_len,
+                            n_head,
+                            batch_size,
+                        ),
+                    );
+
+                    let kq = ctx0.op_reshape_4d(&kq, sequence_len,sequence_len, n_head* batch_size,1);
+
+
+                    let kq = ctx0.op_soft_max(&kq); // (256, 256, 12, 8)
                                                 // v (32, 256, 12, 8)
+
                     v = ctx0.op_cont(&ctx0.op_transpose(&v));
                     // v (256, 32, 12, 8)
 
@@ -610,11 +650,16 @@ impl KnownModel for Bert {
                     let kqv = ctx0.op_reshape_4d(kqv, d_head, sequence_len, n_head, batch_size);
                     // kqv (32, 256, 12, 8)
 
+
+
                     // Permute
                     let kqv = ctx0.op_permute(&kqv, (0, 2, 1, 3));
 
+
+
                     // let kqv = ctx0.op_reshape_4d(&kqv, d_head, n_head, sequence_len, batch_size);
                     // kqv (32, 12, 256, 8)
+
 
                     current = ctx0.op_cpy(
                         &kqv,
@@ -622,11 +667,16 @@ impl KnownModel for Bert {
                     );
                 }
 
+
                 // attention output
                 current = ctx0.op_add(
                     &ctx0.op_mul_mat(&self.layers[il].o_w, &current),
                     &self.layers[il].o_b,
                 );
+
+
+                
+
 
                 // re-add the layer input
                 current = ctx0.op_add(&current, &input_layer);
@@ -662,6 +712,8 @@ impl KnownModel for Bert {
                         &self.layers[il].ln_out_b,
                     );
                 }
+
+
 
                 // input for next layer
                 input_layer = current;
@@ -701,6 +753,8 @@ impl KnownModel for Bert {
                 },
             )
         });
+
+
 
         // finish evaluation
         common::extract_embeddings(
