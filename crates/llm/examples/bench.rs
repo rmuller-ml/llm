@@ -72,7 +72,7 @@ fn main() {
 
     //let queries = vec!["the cat sat on the mat", "the quick brown fox jumped over"];
     //let queries = vec!["the cat sat on the mat"];
-    let queries = vec!["the cat sat on the mat", "the cat sat on the mat"];
+    let queries = vec!["the cat sat on the mat", "the quick brown fox jumped over"];
 
     // let queries = vec!["the quick brown fox jumped over"];
 
@@ -134,8 +134,9 @@ fn get_batch_embeddings(
     model.batch_evaluate(&mut session, &query_token_ids, &mut output_request);
     let _embeddings = output_request.embeddings.unwrap();
 
-    dbg!(&_embeddings[..10]);
-    dbg!(&_embeddings[128*384..128*384+10]);
+    //dbg!(&_embeddings[..10]);
+    //dbg!(&_embeddings[128*5..128*5+10]);
+    //dbg!(&_embeddings[128*384..128*384+10]);
 
     // Cast to ndarray reshape to (8, 384)
     // let _embeddings = Array3::from_shape_vec((8, 384, 1), _embeddings).unwrap();
@@ -146,15 +147,15 @@ fn get_batch_embeddings(
     // // Print the first 10 elements
     // dbg!(&_embeddings.to_vec()[..10]);
 
-    // let _embeddings = Array3::from_shape_vec((8, 384, 2), _embeddings).unwrap();
+    let _embeddings = Array3::from_shape_vec((query_token_ids.len(), 384, 128), _embeddings).unwrap();
     // // // Get the mean over the first dimension (384, 2)
-    // let _embeddings = _embeddings.mean_axis(ndarray::Axis(0)).unwrap();
+    let _embeddings = _embeddings.sum_axis(ndarray::Axis(2));
     // // Permute the axes to (2, 384)
     // // Iterate over rows in the matrix
-    // for row in _embeddings.t().rows() {
-    //     // let row = row.into_shape((384,)).unwrap();
-    //     dbg!(&row.to_vec()[..10]);
-    // }
+    for row in _embeddings.rows() {
+        // let row = row.into_shape((384,)).unwrap();
+        dbg!(&row.to_vec()[..384]);
+    }
     // // let _embeddings = _embeddings.index_axis_move(ndarray::Axis(1), 0);
     // // dbg!(&_embeddings.shape());
     // // // Print the first 10 elements
