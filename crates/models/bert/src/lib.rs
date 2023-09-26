@@ -717,8 +717,13 @@ impl KnownModel for Bert {
             sum = ctx0.set_f32(&sum, 1.0);
             input_layer = ctx0.op_mul_mat(&sum, &input_layer);
             input_layer = ctx0.op_cont(&ctx0.op_permute(&input_layer, (2,1,0,3)));
+            // Normalization
+            input_layer = ctx0.op_norm(&input_layer);
+            input_layer = ctx0.op_scale(
+                &input_layer,
+                &ctx0.new_f32(1.0 / ((n_embd as f32).sqrt())),
+            );
 
-            //TODO: op_norm
             (
                 gf,
                 GraphOutputs {

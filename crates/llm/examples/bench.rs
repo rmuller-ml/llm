@@ -134,10 +134,10 @@ fn get_batch_embeddings(
     let _embeddings = output_request.embeddings.unwrap();
     
     // Embeddings have size [batch_size, 384]
-    // First 10 elements of example 0
-    dbg!(&_embeddings[..10]);
-    // // First 10 elements of example 1
-    dbg!(&_embeddings[384..384+10]);
+    // First 16 elements of example 0
+    dbg!(&_embeddings[..16]);
+    // // First 16 elements of example 1
+    dbg!(&_embeddings[384..384+16]);
     
     BenchResult {
         elapsed: s.elapsed(),
