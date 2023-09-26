@@ -748,13 +748,13 @@ impl KnownModel for Bert {
             input_layer = ctx0.op_mul(&input_layer, &bin_attention_mask_tensor);
             input_layer = ctx0.op_reshape_3d(&input_layer, sequence_len,batch_size,n_embd);
 
-            let mut sum =
-                ctx0.new_tensor_1d(llm_base::ElementType::F32, sequence_len);
-             sum = ctx0.set_f32(&sum, 1.0);
+            // let mut sum =
+            //     ctx0.new_tensor_1d(llm_base::ElementType::F32, sequence_len);
+            //  sum = ctx0.set_f32(&sum, 1.0);
 
-            input_layer = ctx0.op_mul_mat(&sum, &input_layer);
+            //input_layer = ctx0.op_mul_mat(&sum, &input_layer);
 
-            input_layer = ctx0.op_cont(&ctx0.op_permute(&input_layer, (2,1,0,3)));
+            input_layer = ctx0.op_cont(&ctx0.op_permute(&input_layer, (0,2,1,3)));
 
 
 
@@ -799,7 +799,7 @@ impl KnownModel for Bert {
             output_request,
             &outputs.embedding_result,
             n_embd,
-            batch_size,
+            batch_size* sequence_len,
         );
     }
 

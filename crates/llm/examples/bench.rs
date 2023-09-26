@@ -134,7 +134,8 @@ fn get_batch_embeddings(
     model.batch_evaluate(&mut session, &query_token_ids, &mut output_request);
     let _embeddings = output_request.embeddings.unwrap();
 
-    dbg!(&_embeddings[..7]);
+    dbg!(&_embeddings[..10]);
+    dbg!(&_embeddings[128*384..128*384+10]);
 
     // Cast to ndarray reshape to (8, 384)
     // let _embeddings = Array3::from_shape_vec((8, 384, 1), _embeddings).unwrap();
