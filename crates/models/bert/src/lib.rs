@@ -391,7 +391,7 @@ impl KnownModel for Bert {
         common::extract_embeddings(output_request, &outputs.embedding_result, n_embd, input_len);
     }
 
-    /// Blah, blah, blah
+    /// Run BERT inference for batched examples
     #[tracing::instrument(level = "trace", skip_all)]
     fn batch_evaluate(
         &self,
@@ -400,9 +400,11 @@ impl KnownModel for Bert {
         output_request: &mut OutputRequest,
     ) {
         let batch_size = input_tokens.len();
-        dbg!(batch_size);
+        // sequence_len is fixed sized (all examples are padded to this length)
         let sequence_len: usize = input_tokens[0].len();
 
+        // For every token, the number of non-padding tokens in the example (used for mean pooling)
+        // [sequence_len * batch_size]
         let example_len: Vec<u32> = input_tokens.iter().map(
             |example| {
                 let e_lens: Vec<u32> = vec![example.iter().map(|&i| if i == self.pad_token_id().unwrap(){0} else {1}).sum(); sequence_len];
@@ -410,8 +412,8 @@ impl KnownModel for Bert {
             }
         ).flatten().collect();
 
-
-        // TODO: Keep track of unpadded sequence lengths
+        // The actual tokens after tokenizer
+        // [sequence_len * batch_size]
         let input_tokens = input_tokens
             .iter()
             .flat_map(|row| {
@@ -421,7 +423,6 @@ impl KnownModel for Bert {
                 row
             })
             .collect::<Vec<_>>();
-        // dbg!(&input_tokens);
 
 
         // If input token is equal to pad token, then set to the largest negative float32, otherwise make it 0.0
@@ -435,8 +436,8 @@ impl KnownModel for Bert {
                 }
             })
             .collect::<Vec<_>>();
-        dbg!(&attention_mask);
 
+        // 1/(number of non-padding tokens in example) for each token    
         let binary_attention_mask = input_tokens
             .iter().zip(example_len.iter())
             .map(|(&tok, &e_len)| {
@@ -450,7 +451,6 @@ impl KnownModel for Bert {
 
         // batch_size * sequence_len
         let input_len = input_tokens.len();
-        dbg!(input_len);
 
         let _session_len = session.n_past;
         let _ctx_size = self.params.context_size;
@@ -485,7 +485,7 @@ impl KnownModel for Bert {
                 ctx0.new_tensor_4d(llm_base::ElementType::F32, input_len, 1, 1, 1);
             unsafe { bin_attention_mask_tensor.write_data(bytemuck::cast_slice(&binary_attention_mask)) }; 
 
-            // IL = word_embeddings + token_types + position_embeddingso
+            // IL = word_embeddings + token_types + position_embeddings
             {
                 // token-types: a zero tensor
                 let mut token_types = ctx0.new_tensor_1d(llm_base::ElementType::I32, input_len);
@@ -598,32 +598,21 @@ impl KnownModel for Bert {
                         ),
                     );
 
-                    // You could reshape 4 dimensional input tensors from [a,b,c,d] to [a,b,c*d,1]
-                    // before using mul_mat and then reshape the result [x,y,c*d] back to [x,y,c,d].
-                    // Make 3d for matmul
+                    // Merge batch and heads dimensions
                     let q = ctx0.op_reshape_3d(&q, d_head, sequence_len, n_head * batch_size);
                     let k = ctx0.op_reshape_3d(&k, d_head, sequence_len, n_head * batch_size);
                     v = ctx0.op_reshape_3d(&v, d_head, sequence_len, n_head * batch_size);
 
                     let mut kq = ctx0.op_mul_mat(&k, &q);
 
-                    
-
-
-                    // Reshape back to 4d
-                    // kq = ctx0.op_reshape_4d(&kq, sequence_len, sequence_len, n_head, batch_size);
-
-                    // TODO: look into op_scale_inplace and op_soft_max_inplace
                     kq = ctx0.op_scale(
                         &kq,
                         &ctx0.new_f32(1.0 / ((n_embd as f32 / n_head as f32).sqrt())),
                     );
 
-                    // Add attention mask (256, 256, 12, 2)
-                    // Reshape attention mask (256, 2)
-
-
+                    // Split batch and head in separate dimensions
                     let kq = ctx0.op_reshape_4d(&kq, sequence_len,sequence_len, n_head, batch_size);
+                    // Move batch dim to the first dim 
                     let kq = ctx0.op_permute(&kq, (0,3,2,1));
                     let kq = ctx0.op_cpy(
                         &kq,
@@ -635,13 +624,13 @@ impl KnownModel for Bert {
                             sequence_len,
                         ),
                     );
+                    // Merge seq_len and batch dimension
                     let kq = ctx0.op_reshape_4d(&kq, sequence_len*batch_size, n_head, sequence_len,1);
 
-                    // let attention_mask_tensor =
-                    //     ctx0.op_reshape_4d(&attention_mask_tensor, sequence_len, 1, 1, batch_size);
+                    // attention mask is 1D [sequence_len*batch_size]
+                    // Add is broadcasted
                     let kq = ctx0.op_add(&kq, &attention_mask_tensor);
-                    //intermediate_tensor = kq.share();
-
+                    // Reverting dimensions back to [seq_len, seq_len, n_head, bsz]
                     let kq = ctx0.op_reshape_4d(&kq, sequence_len, batch_size, n_head, sequence_len);
                     let kq = ctx0.op_permute(&kq, (0,3,2,1));
                     let kq = ctx0.op_cpy(
@@ -655,37 +644,15 @@ impl KnownModel for Bert {
                         ),
                     );
 
+                    // Merge head and batch dim 
                     let kq = ctx0.op_reshape_4d(&kq, sequence_len,sequence_len, n_head* batch_size,1);
-
-
-                    let kq = ctx0.op_soft_max(&kq); // (256, 256, 12, 8)
-                                                // v (32, 256, 12, 8)
+                    let kq = ctx0.op_soft_max(&kq); 
 
                     v = ctx0.op_cont(&ctx0.op_transpose(&v));
-                    // v (256, 32, 12, 8)
-
-                    // let kq =
-                    //     ctx0.op_reshape_3d(&kq, sequence_len, sequence_len, n_head * batch_size); // (256, 256, 96, 1)
-                    // let v = ctx0.op_reshape_3d(&v, sequence_len, d_head, n_head * batch_size); // (256, 32, 96, 1)
-
                     let kqv = &ctx0.op_mul_mat(&v, &kq);
-                    // kqv (32, 256, 96, 1)
-
                     // Reshape back to 4d
                     let kqv = ctx0.op_reshape_4d(kqv, d_head, sequence_len, n_head, batch_size);
-                    // kqv (32, 256, 12, 8)
-
-
-
-                    // Permute
                     let kqv = ctx0.op_permute(&kqv, (0, 2, 1, 3));
-
-
-
-                    // let kqv = ctx0.op_reshape_4d(&kqv, d_head, n_head, sequence_len, batch_size);
-                    // kqv (32, 12, 256, 8)
-
-
                     current = ctx0.op_cpy(
                         &kqv,
                         &ctx0.new_tensor_3d(ggml::Type::F32, n_embd, sequence_len, batch_size),
@@ -698,10 +665,6 @@ impl KnownModel for Bert {
                     &ctx0.op_mul_mat(&self.layers[il].o_w, &current),
                     &self.layers[il].o_b,
                 );
-
-
-                
-
 
                 // re-add the layer input
                 current = ctx0.op_add(&current, &input_layer);
@@ -738,51 +701,24 @@ impl KnownModel for Bert {
                     );
                 }
 
-
-
                 // input for next layer
                 input_layer = current;
             }
+
+            // Merge seq_len and batch in first dimension
             input_layer = ctx0.op_cont(&ctx0.op_permute(&input_layer, (2,0,1,3)));
             input_layer = ctx0.op_reshape_2d(&input_layer, batch_size*sequence_len,n_embd);
+            // Multiplicative masking + weighting
             input_layer = ctx0.op_mul(&input_layer, &bin_attention_mask_tensor);
             input_layer = ctx0.op_reshape_3d(&input_layer, sequence_len,batch_size,n_embd);
+            // Reduce_sum over first dimension (pooling)
+            let mut sum =
+                 ctx0.new_tensor_2d(llm_base::ElementType::F16, sequence_len,1);
+            sum = ctx0.set_f32(&sum, 1.0);
+            input_layer = ctx0.op_mul_mat(&sum, &input_layer);
+            input_layer = ctx0.op_cont(&ctx0.op_permute(&input_layer, (2,1,0,3)));
 
-            // let mut sum =
-            //     ctx0.new_tensor_1d(llm_base::ElementType::F32, sequence_len);
-            //  sum = ctx0.set_f32(&sum, 1.0);
-
-            //input_layer = ctx0.op_mul_mat(&sum, &input_layer);
-
-            input_layer = ctx0.op_cont(&ctx0.op_permute(&input_layer, (0,2,1,3)));
-
-
-
-            // Slice the tensor to get the first row in the batch
-
-            // ctx0.set_offloading(false);
-            // pooler
-            // let mut sum =
-            //     ctx0.new_tensor_3d(llm_base::ElementType::F32, sequence_len, 1, batch_size);
-            // sum = ctx0.set_f32(&sum, 1.0);
-            // sum = ctx0.op_mul(&sum, &scaling_factor_tensor);
-
-            // // (256, 384, 2, 1) * (256, 1, 2, 1)
-            // input_layer = ctx0.op_mul(&input_layer, &binary_attention_mask_tensor);
-
-            // input_layer = ctx0.op_cpy(
-            //     &input_layer,
-            //     &ctx0.new_tensor_3d(ggml::Type::F16, sequence_len, n_embd, batch_size),
-            // );
-            // input_layer =
-            //     ctx0.op_reshape_2d(&ctx0.op_mul_mat(&input_layer, &sum), n_embd, batch_size);
-
-            // normalizer
-            // let length = ctx0.op_sqrt(&ctx0.op_sum(&ctx0.op_sqr(&input_layer)));
-
-            // input_layer = ctx0.op_scale(&input_layer, &ctx0.op_div(&ctx0.new_f32(1.0), &length));
-            // println!("writing dot graph");
-
+            //TODO: op_norm
             (
                 gf,
                 GraphOutputs {
@@ -799,7 +735,7 @@ impl KnownModel for Bert {
             output_request,
             &outputs.embedding_result,
             n_embd,
-            batch_size* sequence_len,
+            batch_size,
         );
     }
 
