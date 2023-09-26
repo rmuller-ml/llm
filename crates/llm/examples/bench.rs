@@ -1,4 +1,3 @@
-use ndarray::{s, Array2, Array3};
 use std::{path::PathBuf, vec};
 
 use clap::Parser;
