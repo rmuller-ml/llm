@@ -9,6 +9,7 @@ use llm_base::{
     util, FileType, GraphOutputs, InferenceSession, InferenceSessionConfig, KnownModel, LoadError,
     ModelParameters, OutputRequest, Regex, TensorLoader, TokenId, Tokenizer,
 };
+use num_traits::ToPrimitive;
 
 /// The BERT model.
 ///
@@ -400,7 +401,15 @@ impl KnownModel for Bert {
     ) {
         let batch_size = input_tokens.len();
         dbg!(batch_size);
-        let sequence_len = 8;
+        let sequence_len: usize = input_tokens[0].len();
+
+        let example_len: Vec<u32> = input_tokens.iter().map(
+            |example| {
+                let e_lens: Vec<u32> = vec![example.iter().map(|&i| if i == self.pad_token_id().unwrap(){0} else {1}).sum(); sequence_len];
+                e_lens
+            }
+        ).flatten().collect();
+
 
         // TODO: Keep track of unpadded sequence lengths
         let input_tokens = input_tokens
@@ -408,11 +417,12 @@ impl KnownModel for Bert {
             .flat_map(|row| {
                 let mut row = row.to_vec();
                 let pad_token_id = self.pad_token_id().unwrap();
-                row.resize(8, pad_token_id);
+                row.resize(sequence_len, pad_token_id);
                 row
             })
             .collect::<Vec<_>>();
         // dbg!(&input_tokens);
+
 
         // If input token is equal to pad token, then set to the largest negative float32, otherwise make it 0.0
         let attention_mask = input_tokens
@@ -426,6 +436,17 @@ impl KnownModel for Bert {
             })
             .collect::<Vec<_>>();
         dbg!(&attention_mask);
+
+        let binary_attention_mask = input_tokens
+            .iter().zip(example_len.iter())
+            .map(|(&tok, &e_len)| {
+                if tok == self.pad_token_id().unwrap() {
+                    0.0
+                } else {
+                    1.0 / e_len.to_f32().unwrap()
+                }
+            })
+            .collect::<Vec<_>>();
 
         // batch_size * sequence_len
         let input_len = input_tokens.len();
@@ -460,6 +481,10 @@ impl KnownModel for Bert {
                 ctx0.new_tensor_4d(llm_base::ElementType::F32, input_len, 1, 1, 1);
             unsafe { attention_mask_tensor.write_data(bytemuck::cast_slice(&attention_mask)) }; 
 
+            let mut bin_attention_mask_tensor =
+                ctx0.new_tensor_4d(llm_base::ElementType::F32, input_len, 1, 1, 1);
+            unsafe { bin_attention_mask_tensor.write_data(bytemuck::cast_slice(&binary_attention_mask)) }; 
+
             // IL = word_embeddings + token_types + position_embeddingso
             {
                 // token-types: a zero tensor
@@ -467,7 +492,7 @@ impl KnownModel for Bert {
                 token_types.zero_data();
 
                 // position embeddings: another tensor
-                let position_buf: Vec<i32> = (0..input_len as i32).map(|x| x % 8).collect();
+                let position_buf: Vec<i32> = (0..input_len as i32).map(|x| x % sequence_len.to_i32().unwrap()).collect();
                 let mut positions = ctx0.new_tensor_1d(llm_base::ElementType::I32, input_len);
                 unsafe { positions.write_data(bytemuck::cast_slice(&position_buf)) };
 
@@ -718,7 +743,20 @@ impl KnownModel for Bert {
                 // input for next layer
                 input_layer = current;
             }
-            input_layer = ctx0.op_cont(&ctx0.op_transpose(&input_layer));
+            input_layer = ctx0.op_cont(&ctx0.op_permute(&input_layer, (2,0,1,3)));
+            input_layer = ctx0.op_reshape_2d(&input_layer, batch_size*sequence_len,n_embd);
+            input_layer = ctx0.op_mul(&input_layer, &bin_attention_mask_tensor);
+            input_layer = ctx0.op_reshape_3d(&input_layer, sequence_len,batch_size,n_embd);
+
+            let mut sum =
+                ctx0.new_tensor_1d(llm_base::ElementType::F32, sequence_len);
+             sum = ctx0.set_f32(&sum, 1.0);
+
+            input_layer = ctx0.op_mul_mat(&sum, &input_layer);
+
+            input_layer = ctx0.op_cont(&ctx0.op_permute(&input_layer, (2,1,0,3)));
+
+
 
             // Slice the tensor to get the first row in the batch
 
@@ -761,7 +799,7 @@ impl KnownModel for Bert {
             output_request,
             &outputs.embedding_result,
             n_embd,
-            sequence_len * batch_size,
+            batch_size,
         );
     }
 

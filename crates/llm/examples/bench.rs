@@ -92,8 +92,8 @@ fn main() {
     let inference_parameters = llm::InferenceParameters::default();
 
     // Generate embeddings for query and comparands
-    //get_batch_embeddings(model.as_ref(), &inference_parameters, &queries);
-    get_embeddings(model.as_ref(), &inference_parameters, queries[0]);
+    get_batch_embeddings(model.as_ref(), &inference_parameters, &queries);
+    //get_embeddings(model.as_ref(), &inference_parameters, queries[0]);
 }
 
 fn get_batch_embeddings(
@@ -134,7 +134,7 @@ fn get_batch_embeddings(
     model.batch_evaluate(&mut session, &query_token_ids, &mut output_request);
     let _embeddings = output_request.embeddings.unwrap();
 
-    dbg!(&_embeddings[384*8..384*8+7]);
+    dbg!(&_embeddings[..7]);
 
     // Cast to ndarray reshape to (8, 384)
     // let _embeddings = Array3::from_shape_vec((8, 384, 1), _embeddings).unwrap();
